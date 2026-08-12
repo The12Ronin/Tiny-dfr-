@@ -56,6 +56,9 @@ use pixel_shift::{PixelShiftManager, PIXEL_SHIFT_WIDTH_PX};
 const BUTTON_SPACING_PX: i32 = 16;
 const BUTTON_COLOR_INACTIVE: f64 = 0.200;
 const BUTTON_COLOR_ACTIVE: f64 = 0.400;
+const BUTTON_TINT_INACTIVE: f64 = 0.55;
+const BUTTON_TINT_ACTIVE: f64 = 1.0;
+const BUTTON_PALETTE: [(f64, f64, f64); 13] = [(1.0,0.23,0.23),(1.0,0.51,0.16),(1.0,0.78,0.16),(0.71,0.9,0.2),(0.31,0.86,0.35),(0.24,0.82,0.71),(0.24,0.71,1.0),(0.31,0.51,1.0),(0.55,0.39,1.0),(0.78,0.35,0.94),(1.0,0.31,0.75),(1.0,0.27,0.47),(0.72,0.52,0.30)];
 const DEFAULT_ICON_SIZE: i32 = 48;
 const TIMEOUT_MS: i32 = 10 * 1000;
 
@@ -526,7 +529,7 @@ impl Button {
             toggle_keys(uinput, &self.action, active as i32);
         }
     }
-    fn set_background_color(&self, c: &Context, color: f64) {
+    fn set_background_color(&self, c: &Context, color: f64, index: usize) {
         if let ButtonImage::Battery(battery, _, _) = &self.image {
             let (_, state) = get_battery_state(battery);
             match state {
@@ -535,7 +538,9 @@ impl Button {
                 BatteryState::Low => c.set_source_rgb(color, 0.0, 0.0),
             }
         } else {
-            c.set_source_rgb(color, color, color);
+            let (r,g,b) = BUTTON_PALETTE[index % BUTTON_PALETTE.len()];
+            let k = if self.active { BUTTON_TINT_ACTIVE } else { BUTTON_TINT_INACTIVE };
+            if color == 0.0 { c.set_source_rgb(0.0,0.0,0.0); } else { c.set_source_rgb(r*k, g*k, b*k); }
         }
     }
 }
@@ -658,7 +663,7 @@ impl FunctionLayer {
                 c.fill().unwrap();
             }
             if !matches!(button.image, ButtonImage::Spacer) {
-                button.set_background_color(&c, color);
+                button.set_background_color(&c, color, i);
                 // draw box with rounded corners
                 c.new_sub_path();
                 let left = left_edge + radius;
