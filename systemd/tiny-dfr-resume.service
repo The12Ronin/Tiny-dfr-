@@ -1,0 +1,11 @@
+[Unit]
+Description=Restart tiny-dfr after resume
+After=suspend.target hibernate.target hybrid-sleep.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 2
+ExecStart=/bin/systemctl restart tiny-dfr
+
+[Install]
+WantedBy=suspend.target hibernate.target hybrid-sleep.target

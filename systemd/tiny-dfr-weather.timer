@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh tiny-dfr weather
+
+[Timer]
+OnBootSec=45
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Now playing for tiny-dfr
+
+[Service]
+ExecStart=%h/.local/bin/tiny-dfr-music
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

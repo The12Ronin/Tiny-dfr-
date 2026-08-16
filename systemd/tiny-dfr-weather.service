@@ -1,0 +1,7 @@
+[Unit]
+Description=Fetch weather for tiny-dfr
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tiny-dfr-weather
