@@ -162,4 +162,5 @@ SystemLayerKeys = [
     { Sysinfo = "temp", Stretch = 3 },
     { Sysinfo = "mem", Stretch = 3 },
     { Sysinfo = "fan", Stretch = 3 },
+    { Sysinfo = "disk", Stretch = 3 },
 ]
