@@ -3,3 +3,6 @@
 .idea/
 
 *.swp
+src/.backup
+src/.orig
+src/*-backup
