@@ -101,6 +101,7 @@ enum SysMetric {
     Disk,
     Weather,
     Music,
+    Net,
 }
 
 static CPU_PREV_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -128,6 +129,61 @@ fn read_weather() -> String {
         }
         Err(_) => "--".to_string(),
     }
+}
+
+static NET_PREV_RX: AtomicU64 = AtomicU64::new(0);
+static NET_PREV_TX: AtomicU64 = AtomicU64::new(0);
+static NET_PREV_MS: AtomicU64 = AtomicU64::new(0);
+static NET_CACHE_RX: AtomicU64 = AtomicU64::new(0);
+static NET_CACHE_TX: AtomicU64 = AtomicU64::new(0);
+
+fn human_rate(bps: f64) -> String {
+    if bps >= 1_000_000.0 {
+        format!("{:.1}M", bps / 1_000_000.0)
+    } else if bps >= 1000.0 {
+        format!("{:.0}K", bps / 1000.0)
+    } else {
+        "0K".to_string()
+    }
+}
+
+fn read_net() -> String {
+    let data = match fs::read_to_string("/proc/net/dev") {
+        Ok(d) => d,
+        Err(_) => return "-- --".to_string(),
+    };
+    let mut rx: u64 = 0;
+    let mut tx: u64 = 0;
+    for line in data.lines().skip(2) {
+        let mut parts = line.split(':');
+        let name = parts.next().unwrap_or("").trim();
+        if name == "lo" || name.starts_with("docker") || name.starts_with("virbr") {
+            continue;
+        }
+        let nums: Vec<u64> = match parts.next() {
+            Some(r) => r.split_whitespace().filter_map(|v| v.parse().ok()).collect(),
+            None => continue,
+        };
+        if nums.len() >= 9 {
+            rx += nums[0];
+            tx += nums[8];
+        }
+    }
+    let now = now_ms();
+    let prev_ms = NET_PREV_MS.swap(now, AtomicOrdering::Relaxed);
+    let prev_rx = NET_PREV_RX.swap(rx, AtomicOrdering::Relaxed);
+    let prev_tx = NET_PREV_TX.swap(tx, AtomicOrdering::Relaxed);
+    let dt = now.saturating_sub(prev_ms) as f64 / 1000.0;
+    if prev_ms == 0 || dt < 0.3 {
+        let d = NET_CACHE_RX.load(AtomicOrdering::Relaxed) as f64;
+        let u = NET_CACHE_TX.load(AtomicOrdering::Relaxed) as f64;
+        return format!("D {}  U {}", human_rate(d), human_rate(u));
+    }
+    let drate = rx.saturating_sub(prev_rx) as f64 / dt;
+    let urate = tx.saturating_sub(prev_tx) as f64 / dt;
+    NET_CACHE_RX.store(drate as u64, AtomicOrdering::Relaxed);
+    NET_CACHE_TX.store(urate as u64, AtomicOrdering::Relaxed);
+    format!("D {}  U {}", human_rate(drate), human_rate(urate))
 }
 
 fn read_music() -> String {
@@ -291,6 +347,7 @@ impl SysMetric {
             SysMetric::Disk => cached(&DISK_CACHE, &DISK_CACHE_MS, read_disk_usage),
             SysMetric::Weather => 0.0,
             SysMetric::Music => 0.0,
+            SysMetric::Net => 0.0,
         }
     }
     fn label(self) -> String {
@@ -299,9 +356,10 @@ impl SysMetric {
             SysMetric::Temp => format!("{:.0} C", self.value()),
             SysMetric::Mem => format!("MEM {:.0}%", self.value()),
             SysMetric::Fan => format!("FAN {:.0}", self.value()),
-            SysMetric::Disk => format!("DISK {:.0}%", self.value()),
+            SysMetric::Disk => format!("HD {:.0}%", self.value()),
             SysMetric::Weather => read_weather(),
             SysMetric::Music => read_music(),
+            SysMetric::Net => read_net(),
         }
     }
     fn color(self) -> (f64, f64, f64) {
@@ -310,6 +368,7 @@ impl SysMetric {
             SysMetric::Temp => ((v - 35.0) / 55.0).clamp(0.0, 1.0),
             SysMetric::Weather => 0.0,
             SysMetric::Music => 0.0,
+            SysMetric::Net => 0.0,
             SysMetric::Fan => (v / 5500.0).clamp(0.0, 1.0),
             SysMetric::Disk => (v / 100.0).clamp(0.0, 1.0),
             _ => (v / 100.0).clamp(0.0, 1.0),
@@ -533,6 +592,7 @@ impl Button {
             "disk" => SysMetric::Disk,
             "weather" => SysMetric::Weather,
             "music" => SysMetric::Music,
+            "net" => SysMetric::Net,
             _ => panic!("invalid Sysinfo value, accepted values: cpu, temp, mem"),
         };
         Button {
@@ -1226,7 +1286,7 @@ fn real_main(drm: &mut DrmBackend) {
             last_redraw_ts = current_ts;
         }
         if layers[active_layer].displays_sysinfo {
-            next_timeout_ms = min(next_timeout_ms, 1000);
+            next_timeout_ms = min(next_timeout_ms, 2000);
             for button in &mut layers[active_layer].buttons {
                 if let ButtonImage::SysInfo(_) = button.1.image {
                     button.1.changed = true;

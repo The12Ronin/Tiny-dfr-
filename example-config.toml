@@ -157,12 +157,12 @@ MediaLayerKeys = [
 ]
 
 SystemLayerKeys = [
-    { Battery = "percentage", Action = "Battery", Stretch = 2 },
-    { Time = "%H:%M %a %d %b %y", Stretch = 3 },
+    { Battery = "percentage", Action = "Battery", Stretch = 1 },
+    { Time = "%H:%M %a %d %b %y", Stretch = 4 },
     { Sysinfo = "cpu", Stretch = 2 },
     { Sysinfo = "temp", Stretch = 1 },
     { Sysinfo = "mem", Stretch = 2 },
-    { Sysinfo = "fan", Stretch = 2 },
     { Sysinfo = "disk", Stretch = 2 },
-    { Sysinfo = "weather", Stretch = 3 },
+    { Sysinfo = "net", Stretch = 3 },
+    { Sysinfo = "weather", Stretch = 4 },
 ]
