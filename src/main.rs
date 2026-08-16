@@ -466,7 +466,7 @@ fn get_battery_state(battery: &str) -> (u32, BatteryState) {
                 .ok()
                 .and_then(|s| s.trim().parse::<f64>().ok());
             match (charge_now, charge_full) {
-                (Some(now), Some(full)) if full > 0.0 => ((now / full) * 100.0).round() as u32,
+                (Some(now), Some(full)) if full > 0.0 => ((now / full) * 100.0).round().min(100.0) as u32,
                 _ => 100,
             }
         }
