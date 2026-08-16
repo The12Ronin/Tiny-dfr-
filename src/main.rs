@@ -99,6 +99,7 @@ enum SysMetric {
     Mem,
     Fan,
     Disk,
+    Weather,
 }
 
 static CPU_PREV_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -113,6 +114,20 @@ static FAN_CACHE: AtomicU64 = AtomicU64::new(0);
 static FAN_CACHE_MS: AtomicU64 = AtomicU64::new(0);
 static DISK_CACHE: AtomicU64 = AtomicU64::new(0);
 static DISK_CACHE_MS: AtomicU64 = AtomicU64::new(0);
+
+fn read_weather() -> String {
+    match fs::read_to_string("/run/tiny-dfr-weather") {
+        Ok(s) => {
+            let t = s.trim();
+            if t.is_empty() {
+                "--".to_string()
+            } else {
+                t.to_string()
+            }
+        }
+        Err(_) => "--".to_string(),
+    }
+}
 
 fn read_disk_usage() -> f64 {
     let path = std::ffi::CString::new("/").unwrap();
@@ -266,6 +281,7 @@ impl SysMetric {
             SysMetric::Mem => cached(&MEM_CACHE, &MEM_CACHE_MS, read_mem_usage),
             SysMetric::Fan => cached(&FAN_CACHE, &FAN_CACHE_MS, read_fan_speed),
             SysMetric::Disk => cached(&DISK_CACHE, &DISK_CACHE_MS, read_disk_usage),
+            SysMetric::Weather => 0.0,
         }
     }
     fn label(self) -> String {
@@ -275,6 +291,7 @@ impl SysMetric {
             SysMetric::Mem => format!("MEM {:.0}%", self.value()),
             SysMetric::Fan => format!("FAN {:.0}", self.value()),
             SysMetric::Disk => format!("DISK {:.0}%", self.value()),
+            SysMetric::Weather => read_weather(),
         }
     }
     fn color(self) -> (f64, f64, f64) {
@@ -502,6 +519,7 @@ impl Button {
             "mem" | "memory" | "ram" => SysMetric::Mem,
             "fan" => SysMetric::Fan,
             "disk" => SysMetric::Disk,
+            "weather" => SysMetric::Weather,
             _ => panic!("invalid Sysinfo value, accepted values: cpu, temp, mem"),
         };
         Button {
