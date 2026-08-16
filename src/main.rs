@@ -40,6 +40,7 @@ use std::{
     time::{Duration, Instant},
 };
 use udev::MonitorBuilder;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 mod backlight;
 mod config;
@@ -91,12 +92,196 @@ impl BatteryIconMode {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SysMetric {
+    Cpu,
+    Temp,
+    Mem,
+    Fan,
+}
+
+static CPU_PREV_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CPU_PREV_IDLE: AtomicU64 = AtomicU64::new(0);
+static CPU_CACHE: AtomicU64 = AtomicU64::new(0);
+static CPU_CACHE_MS: AtomicU64 = AtomicU64::new(0);
+static TEMP_CACHE: AtomicU64 = AtomicU64::new(0);
+static TEMP_CACHE_MS: AtomicU64 = AtomicU64::new(0);
+static MEM_CACHE: AtomicU64 = AtomicU64::new(0);
+static MEM_CACHE_MS: AtomicU64 = AtomicU64::new(0);
+static FAN_CACHE: AtomicU64 = AtomicU64::new(0);
+static FAN_CACHE_MS: AtomicU64 = AtomicU64::new(0);
+
+fn scan_fan(dir: &std::path::Path, depth: usize) -> Option<f64> {
+    if depth > 7 {
+        return None;
+    }
+    let mut subdirs = Vec::new();
+    for e in fs::read_dir(dir).ok()?.flatten() {
+        let p = e.path();
+        let name = match p.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        if name == "fan1_input" {
+            if let Ok(raw) = fs::read_to_string(&p) {
+                if let Ok(v) = raw.trim().parse::<f64>() {
+                    return Some(v);
+                }
+            }
+        } else if p.is_dir() && !p.is_symlink() {
+            subdirs.push(p);
+        }
+    }
+    for d in subdirs {
+        if let Some(v) = scan_fan(&d, depth + 1) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+fn read_fan_speed() -> f64 {
+    scan_fan(std::path::Path::new("/sys/devices"), 0).unwrap_or(0.0)
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn cached(cache: &AtomicU64, stamp: &AtomicU64, f: fn() -> f64) -> f64 {
+    let now = now_ms();
+    let last = stamp.load(AtomicOrdering::Relaxed);
+    if last != 0 && now.saturating_sub(last) < 500 {
+        return cache.load(AtomicOrdering::Relaxed) as f64 / 1000.0;
+    }
+    let v = f();
+    cache.store((v * 1000.0) as u64, AtomicOrdering::Relaxed);
+    stamp.store(now, AtomicOrdering::Relaxed);
+    v
+}
+
+fn read_cpu_usage() -> f64 {
+    let stat = match fs::read_to_string("/proc/stat") {
+        Ok(s) => s,
+        Err(_) => return 0.0,
+    };
+    let line = match stat.lines().next() {
+        Some(l) => l,
+        None => return 0.0,
+    };
+    let vals: Vec<u64> = line
+        .split_whitespace()
+        .skip(1)
+        .filter_map(|v| v.parse().ok())
+        .collect();
+    if vals.len() < 4 {
+        return 0.0;
+    }
+    let idle = vals[3] + vals.get(4).copied().unwrap_or(0);
+    let total: u64 = vals.iter().sum();
+    let prev_total = CPU_PREV_TOTAL.swap(total, AtomicOrdering::Relaxed);
+    let prev_idle = CPU_PREV_IDLE.swap(idle, AtomicOrdering::Relaxed);
+    if total <= prev_total {
+        return 0.0;
+    }
+    let dt = (total - prev_total) as f64;
+    let di = idle.saturating_sub(prev_idle) as f64;
+    (((dt - di) / dt) * 100.0).clamp(0.0, 100.0)
+}
+
+fn read_temperature() -> f64 {
+    let mut best = 0.0;
+    if let Ok(entries) = fs::read_dir("/sys/class/thermal") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_zone = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("thermal_zone"))
+                .unwrap_or(false);
+            if !is_zone {
+                continue;
+            }
+            if let Ok(raw) = fs::read_to_string(path.join("temp")) {
+                if let Ok(v) = raw.trim().parse::<f64>() {
+                    let c = v / 1000.0;
+                    if c > best && c < 150.0 {
+                        best = c;
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
+fn read_mem_usage() -> f64 {
+    let info = match fs::read_to_string("/proc/meminfo") {
+        Ok(s) => s,
+        Err(_) => return 0.0,
+    };
+    let mut total = 0.0;
+    let mut avail = 0.0;
+    for line in info.lines() {
+        let mut parts = line.split_whitespace();
+        let key = parts.next().unwrap_or("");
+        let val: f64 = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        match key {
+            "MemTotal:" => total = val,
+            "MemAvailable:" => avail = val,
+            _ => {}
+        }
+    }
+    if total <= 0.0 {
+        return 0.0;
+    }
+    (((total - avail) / total) * 100.0).clamp(0.0, 100.0)
+}
+
+impl SysMetric {
+    fn value(self) -> f64 {
+        match self {
+            SysMetric::Cpu => cached(&CPU_CACHE, &CPU_CACHE_MS, read_cpu_usage),
+            SysMetric::Temp => cached(&TEMP_CACHE, &TEMP_CACHE_MS, read_temperature),
+            SysMetric::Mem => cached(&MEM_CACHE, &MEM_CACHE_MS, read_mem_usage),
+            SysMetric::Fan => cached(&FAN_CACHE, &FAN_CACHE_MS, read_fan_speed),
+        }
+    }
+    fn label(self) -> String {
+        match self {
+            SysMetric::Cpu => format!("CPU {:.0}%", self.value()),
+            SysMetric::Temp => format!("{:.0} C", self.value()),
+            SysMetric::Mem => format!("MEM {:.0}%", self.value()),
+            SysMetric::Fan => format!("FAN {:.0}", self.value()),
+        }
+    }
+    fn color(self) -> (f64, f64, f64) {
+        let v = self.value();
+        let ratio = match self {
+            SysMetric::Temp => ((v - 35.0) / 55.0).clamp(0.0, 1.0),
+            SysMetric::Fan => (v / 5500.0).clamp(0.0, 1.0),
+            _ => (v / 100.0).clamp(0.0, 1.0),
+        };
+        if ratio < 0.5 {
+            (0.20, 0.85, 0.35)
+        } else if ratio < 0.75 {
+            (1.00, 0.75, 0.10)
+        } else {
+            (1.00, 0.25, 0.20)
+        }
+    }
+}
+
 enum ButtonImage {
     Text(String),
     Svg(Handle),
     Bitmap(ImageSurface),
     Time(Vec<ChronoItem<'static>>, Locale),
     Battery(String, BatteryIconMode, BatteryImages),
+    SysInfo(SysMetric),
     Spacer,
 }
 
@@ -274,6 +459,8 @@ impl Button {
             } else {
                 Button::new_text("Battery N/A".to_string(), cfg.action)
             }
+        } else if let Some(kind) = cfg.sysinfo {
+            Button::new_sysinfo(cfg.action, &kind)
         } else {
             Button::new_spacer()
         }
@@ -284,6 +471,23 @@ impl Button {
             active: false,
             changed: false,
             image: ButtonImage::Spacer,
+            icon_width: 0.0,
+            icon_height: 0.0,
+        }
+    }
+    fn new_sysinfo(action: Vec<Key>, kind: &str) -> Button {
+        let metric = match kind.to_lowercase().as_str() {
+            "cpu" => SysMetric::Cpu,
+            "temp" | "temperature" => SysMetric::Temp,
+            "mem" | "memory" | "ram" => SysMetric::Mem,
+            "fan" => SysMetric::Fan,
+            _ => panic!("invalid Sysinfo value, accepted values: cpu, temp, mem"),
+        };
+        Button {
+            action,
+            active: false,
+            changed: false,
+            image: ButtonImage::SysInfo(metric),
             icon_width: 0.0,
             icon_height: 0.0,
         }
@@ -515,6 +719,15 @@ impl Button {
                     c.show_text(&percent_str).unwrap();
                 }
             }
+            ButtonImage::SysInfo(metric) => {
+                let text = metric.label();
+                let extents = c.text_extents(&text).unwrap();
+                c.move_to(
+                    button_left_edge + (button_width as f64 / 2.0 - extents.width() / 2.0).round(),
+                    y_shift + (height as f64 / 2.0 + extents.height() / 2.0).round(),
+                );
+                c.show_text(&text).unwrap();
+            }
             ButtonImage::Spacer => (),
         }
     }
@@ -537,6 +750,14 @@ impl Button {
                 BatteryState::Charging => c.set_source_rgb(0.0, color, 0.0),
                 BatteryState::Low => c.set_source_rgb(color, 0.0, 0.0),
             }
+                } else if let ButtonImage::SysInfo(metric) = &self.image {
+            let (r, g, b) = metric.color();
+            let k = if self.active {
+                BUTTON_TINT_ACTIVE
+            } else {
+                BUTTON_TINT_INACTIVE
+            };
+            c.set_source_rgb(r * k, g * k, b * k);
         } else {
             let (r,g,b) = BUTTON_PALETTE[index % BUTTON_PALETTE.len()];
             let k = if self.active { BUTTON_TINT_ACTIVE } else { BUTTON_TINT_INACTIVE };
@@ -549,6 +770,7 @@ impl Button {
 pub struct FunctionLayer {
     displays_time: bool,
     displays_battery: bool,
+    displays_sysinfo: bool,
     buttons: Vec<(usize, Button)>,
     virtual_button_count: usize,
     faster_refresh: bool,
@@ -563,6 +785,7 @@ impl FunctionLayer {
         let mut virtual_button_count = 0;
         let displays_time = cfg.iter().any(|cfg| cfg.time.is_some());
         let displays_battery = cfg.iter().any(|cfg| cfg.battery.is_some());
+        let displays_sysinfo = cfg.iter().any(|cfg| cfg.sysinfo.is_some());
         let buttons = cfg
             .into_iter()
             .scan(&mut virtual_button_count, |state, cfg| {
@@ -580,6 +803,7 @@ impl FunctionLayer {
         FunctionLayer {
             displays_time,
             displays_battery,
+            displays_sysinfo,
             buttons,
             virtual_button_count,
             faster_refresh,
@@ -949,6 +1173,14 @@ fn real_main(drm: &mut DrmBackend) {
             needs_complete_redraw = true;
             last_redraw_ts = current_ts;
         }
+        if layers[active_layer].displays_sysinfo {
+            next_timeout_ms = min(next_timeout_ms, 1000);
+            for button in &mut layers[active_layer].buttons {
+                if let ButtonImage::SysInfo(_) = button.1.image {
+                    button.1.changed = true;
+                }
+            }
+        }
         if layers[active_layer].displays_battery {
             for button in &mut layers[active_layer].buttons {
                 if let ButtonImage::Battery(_, _, _) = button.1.image {
@@ -1002,7 +1234,8 @@ fn real_main(drm: &mut DrmBackend) {
                     if key.key() == Key::Fn as u32 {
                         if cfg.double_press_switch_layers > 0 && key.key_state() == KeyState::Pressed {
                             if last.elapsed() < Duration::from_millis(cfg.double_press_switch_layers.into()) {
-                                layers.swap(0, 1);
+                                layers.rotate_left(1);
+                                needs_complete_redraw = true;
                             }
                             last = Instant::now();
                         }

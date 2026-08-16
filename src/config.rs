@@ -37,6 +37,7 @@ struct ConfigProxy {
     double_press_switch_layers: Option<u32>,
     primary_layer_keys: Option<Vec<ButtonConfig>>,
     media_layer_keys: Option<Vec<ButtonConfig>>,
+    system_layer_keys: Option<Vec<ButtonConfig>>,
 }
 
 fn array_or_single<'de, D>(deserializer: D) -> Result<Vec<Key>, D::Error>
@@ -75,6 +76,7 @@ pub struct ButtonConfig {
     pub theme: Option<String>,
     pub time: Option<String>,
     pub battery: Option<String>,
+    pub sysinfo: Option<String>,
     pub locale: Option<String>,
     #[serde(deserialize_with = "array_or_single", default)]
     pub action: Vec<Key>,
@@ -98,7 +100,23 @@ fn load_font(name: &str) -> FontFace {
     FontFace::create_from_ft(&face).unwrap()
 }
 
-fn load_config(width: u16) -> (Config, [FunctionLayer; 2]) {
+fn esc_button() -> ButtonConfig {
+    ButtonConfig {
+        icon: None,
+        text: Some("esc".into()),
+        theme: None,
+        action: vec![Key::Esc],
+        stretch: None,
+        time: None,
+        locale: None,
+        battery: None,
+        sysinfo: None,
+        icon_width: None,
+        icon_height: None,
+    }
+}
+
+fn load_config(width: u16) -> (Config, Vec<FunctionLayer>) {
     let mut base =
         toml::from_str::<ConfigProxy>(&read_to_string("/usr/share/tiny-dfr/config.toml").unwrap())
             .unwrap();
@@ -113,6 +131,7 @@ fn load_config(width: u16) -> (Config, [FunctionLayer; 2]) {
         base.adaptive_brightness = user.adaptive_brightness.or(base.adaptive_brightness);
         base.media_layer_keys = user.media_layer_keys.or(base.media_layer_keys);
         base.primary_layer_keys = user.primary_layer_keys.or(base.primary_layer_keys);
+        base.system_layer_keys = user.system_layer_keys.or(base.system_layer_keys);
         base.active_brightness = user.active_brightness.or(base.active_brightness);
         base.double_press_switch_layers = user.double_press_switch_layers.or(base.double_press_switch_layers);
     };
@@ -120,30 +139,23 @@ fn load_config(width: u16) -> (Config, [FunctionLayer; 2]) {
     let mut primary_layer_keys = base.primary_layer_keys.unwrap();
     if width >= 2170 {
         for layer in [&mut media_layer_keys, &mut primary_layer_keys] {
-            layer.insert(
-                0,
-                ButtonConfig {
-                    icon: None,
-                    text: Some("esc".into()),
-                    theme: None,
-                    action: vec![Key::Esc],
-                    stretch: None,
-                    time: None,
-                    locale: None,
-                    battery: None,
-                    icon_width: None,
-                    icon_height: None,
-                },
-            );
+            layer.insert(0, esc_button());
         }
+    }
+    let mut system_layer_keys = base.system_layer_keys.unwrap_or_default();
+    if width >= 2170 && !system_layer_keys.is_empty() {
+        system_layer_keys.insert(0, esc_button());
     }
     let media_layer = FunctionLayer::with_config(media_layer_keys);
     let fkey_layer = FunctionLayer::with_config(primary_layer_keys);
-    let layers = if base.media_layer_default.unwrap() {
-        [media_layer, fkey_layer]
+    let mut layers = if base.media_layer_default.unwrap() {
+        vec![media_layer, fkey_layer]
     } else {
-        [fkey_layer, media_layer]
+        vec![fkey_layer, media_layer]
     };
+    if !system_layer_keys.is_empty() {
+        layers.push(FunctionLayer::with_config(system_layer_keys));
+    }
     let cfg = Config {
         show_button_outlines: base.show_button_outlines.unwrap(),
         enable_pixel_shift: base.enable_pixel_shift.unwrap(),
@@ -178,13 +190,13 @@ impl ConfigManager {
             watch_desc,
         }
     }
-    pub fn load_config(&self, width: u16) -> (Config, [FunctionLayer; 2]) {
+    pub fn load_config(&self, width: u16) -> (Config, Vec<FunctionLayer>) {
         load_config(width)
     }
     pub fn update_config(
         &mut self,
         cfg: &mut Config,
-        layers: &mut [FunctionLayer; 2],
+        layers: &mut Vec<FunctionLayer>,
         width: u16,
     ) -> bool {
         if self.watch_desc.is_none() {
@@ -197,7 +209,7 @@ impl ConfigManager {
         }
     }
     #[cold]
-    fn handle_events(&mut self, cfg: &mut Config, layers: &mut [FunctionLayer; 2], width: u16, evts: Result<Vec<InotifyEvent>, Errno>) -> bool {
+    fn handle_events(&mut self, cfg: &mut Config, layers: &mut Vec<FunctionLayer>, width: u16, evts: Result<Vec<InotifyEvent>, Errno>) -> bool {
         let mut ret = false;
         for evt in evts.unwrap() {
             if Some(evt.wd) != self.watch_desc {
