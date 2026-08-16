@@ -100,6 +100,7 @@ enum SysMetric {
     Fan,
     Disk,
     Weather,
+    Music,
 }
 
 static CPU_PREV_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -126,6 +127,13 @@ fn read_weather() -> String {
             }
         }
         Err(_) => "--".to_string(),
+    }
+}
+
+fn read_music() -> String {
+    match fs::read_to_string("/run/tiny-dfr-music") {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => String::new(),
     }
 }
 
@@ -282,6 +290,7 @@ impl SysMetric {
             SysMetric::Fan => cached(&FAN_CACHE, &FAN_CACHE_MS, read_fan_speed),
             SysMetric::Disk => cached(&DISK_CACHE, &DISK_CACHE_MS, read_disk_usage),
             SysMetric::Weather => 0.0,
+            SysMetric::Music => 0.0,
         }
     }
     fn label(self) -> String {
@@ -292,12 +301,15 @@ impl SysMetric {
             SysMetric::Fan => format!("FAN {:.0}", self.value()),
             SysMetric::Disk => format!("DISK {:.0}%", self.value()),
             SysMetric::Weather => read_weather(),
+            SysMetric::Music => read_music(),
         }
     }
     fn color(self) -> (f64, f64, f64) {
         let v = self.value();
         let ratio = match self {
             SysMetric::Temp => ((v - 35.0) / 55.0).clamp(0.0, 1.0),
+            SysMetric::Weather => 0.0,
+            SysMetric::Music => 0.0,
             SysMetric::Fan => (v / 5500.0).clamp(0.0, 1.0),
             SysMetric::Disk => (v / 100.0).clamp(0.0, 1.0),
             _ => (v / 100.0).clamp(0.0, 1.0),
@@ -520,6 +532,7 @@ impl Button {
             "fan" => SysMetric::Fan,
             "disk" => SysMetric::Disk,
             "weather" => SysMetric::Weather,
+            "music" => SysMetric::Music,
             _ => panic!("invalid Sysinfo value, accepted values: cpu, temp, mem"),
         };
         Button {

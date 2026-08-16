@@ -123,16 +123,15 @@ PrimaryLayerKeys = [
     # Button will turn green if battery is charging, and red if charge is <10% and is not charging.
 
     # Example of a Spacer:
-    # { Stretch = 3 }
+    # { Stretch = 2 }
     # Stretch functions the same way as it does for normal buttons.
 ]
 
 # This key defines the contents of the media key layer
 MediaLayerKeys = [ 
-    { Battery = "percentage",   Action = "Battery"        },
     { Icon = "brightness_low",  Action = "BrightnessDown" },
     { Icon = "brightness_high", Action = "BrightnessUp"   },
-    { Time = "24hr",         Action = "Time" ,Stretch   = 3 },
+    { Sysinfo = "music", Stretch = 6 },
     { Icon = "backlight_low",   Action = "IllumDown"      },
     { Icon = "backlight_high",  Action = "IllumUp"        },
     { Icon = "fast_rewind",     Action = "PreviousSong"   },
@@ -158,10 +157,12 @@ MediaLayerKeys = [
 ]
 
 SystemLayerKeys = [
-    { Sysinfo = "cpu", Stretch = 3 },
-    { Sysinfo = "temp", Stretch = 3 },
-    { Sysinfo = "mem", Stretch = 3 },
-    { Sysinfo = "fan", Stretch = 3 },
-    { Sysinfo = "disk", Stretch = 3 },
-    { Sysinfo = "weather", Stretch = 4 },
+    { Battery = "percentage", Action = "Battery", Stretch = 2 },
+    { Time = "%H:%M %a %d %b %y", Stretch = 3 },
+    { Sysinfo = "cpu", Stretch = 2 },
+    { Sysinfo = "temp", Stretch = 1 },
+    { Sysinfo = "mem", Stretch = 2 },
+    { Sysinfo = "fan", Stretch = 2 },
+    { Sysinfo = "disk", Stretch = 2 },
+    { Sysinfo = "weather", Stretch = 3 },
 ]
